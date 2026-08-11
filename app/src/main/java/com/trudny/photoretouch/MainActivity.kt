@@ -60,7 +60,7 @@ fun PaintByNumbersApp() {
     var minRegion by remember { mutableFloatStateOf(45f) }
     var acrylicStrength by remember { mutableFloatStateOf(0.72f) }
     var processing by remember { mutableStateOf(false) }
-    var view by remember { mutableIntStateOf(0) }
+    var previewMode by remember { mutableIntStateOf(1) }
 
     fun refreshCropPreview() {
         val src = original ?: return
@@ -79,7 +79,7 @@ fun PaintByNumbersApp() {
             cropped = null
             acrylic = null
             result = null
-            view = 0
+            previewMode = 1
             cropPreview = decoded?.let { CanvasCropper.crop(it, selectedCanvas, cropOffsetX, cropOffsetY) }
             processing = false
         }
@@ -92,7 +92,7 @@ fun PaintByNumbersApp() {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text("Фото → акрил → холст → картина по номерам", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("Сначала выберите фото, затем размер холста и кадрирование. После подтверждения приложение автоматически создаст акриловую версию.")
+                Text("Выберите фото, настройте холст и кадрирование, затем просматривайте оригинал, акрил и макет перед сохранением.")
 
                 Box(
                     Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)),
@@ -100,9 +100,12 @@ fun PaintByNumbersApp() {
                 ) {
                     val shown = when {
                         !cropConfirmed -> cropPreview ?: original
-                        view == 1 -> result?.numberedTemplate
-                        view == 2 -> result?.paletteSheet
-                        else -> acrylic ?: result?.colorPreview ?: cropped ?: original
+                        previewMode == 0 -> cropped ?: original
+                        previewMode == 1 -> acrylic ?: cropped ?: original
+                        previewMode == 2 -> result?.colorPreview ?: acrylic ?: cropped ?: original
+                        previewMode == 3 -> result?.numberedTemplate ?: acrylic ?: cropped ?: original
+                        previewMode == 4 -> result?.paletteSheet ?: acrylic ?: cropped ?: original
+                        else -> acrylic ?: cropped ?: original
                     }
                     if (shown == null) {
                         Text("Выберите фотографию")
@@ -110,6 +113,23 @@ fun PaintByNumbersApp() {
                         Image(shown.asImageBitmap(), "Предпросмотр", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
                     }
                     if (processing) CircularProgressIndicator()
+                }
+
+                if (cropConfirmed) {
+                    Text("Предпросмотр", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(previewMode == 0, { previewMode = 0 }, { Text("До") }, modifier = Modifier.weight(1f))
+                        FilterChip(previewMode == 1, { previewMode = 1 }, { Text("Акрил") }, modifier = Modifier.weight(1f))
+                        if (result != null) {
+                            FilterChip(previewMode == 2, { previewMode = 2 }, { Text("Цвет") }, modifier = Modifier.weight(1f))
+                        }
+                    }
+                    if (result != null) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(previewMode == 3, { previewMode = 3 }, { Text("Макет") }, modifier = Modifier.weight(1f))
+                            FilterChip(previewMode == 4, { previewMode = 4 }, { Text("Палитра") }, modifier = Modifier.weight(1f))
+                        }
+                    }
                 }
 
                 Button(onClick = { picker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
@@ -168,7 +188,7 @@ fun PaintByNumbersApp() {
                                 }
                                 cropConfirmed = true
                                 result = null
-                                view = 0
+                                previewMode = 1
                                 processing = false
                             }
                         },
@@ -185,7 +205,7 @@ fun PaintByNumbersApp() {
                         onClick = {
                             cropConfirmed = false
                             result = null
-                            view = 0
+                            previewMode = 1
                             refreshCropPreview()
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -199,7 +219,7 @@ fun PaintByNumbersApp() {
                             if (src != null) scope.launch {
                                 processing = true
                                 acrylic = withContext(Dispatchers.Default) { AcrylicPainter.render(src, 1600, acrylicStrength) }
-                                view = 0
+                                previewMode = 1
                                 processing = false
                             }
                         },
@@ -238,7 +258,7 @@ fun PaintByNumbersApp() {
                                 result = withContext(Dispatchers.Default) {
                                     PaintByNumbersGenerator.generate(src, colorCount.toInt(), 1200, minRegion.toInt())
                                 }
-                                view = 0
+                                previewMode = 2
                                 processing = false
                             }
                         },
@@ -248,11 +268,6 @@ fun PaintByNumbersApp() {
                 }
 
                 result?.let { r ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(view == 0, { view = 0 }, { Text("Цвет") }, modifier = Modifier.weight(1f))
-                        FilterChip(view == 1, { view = 1 }, { Text("Макет") }, modifier = Modifier.weight(1f))
-                        FilterChip(view == 2, { view = 2 }, { Text("Палитра") }, modifier = Modifier.weight(1f))
-                    }
                     Text("Сформировано ${r.palette.size} цветов. Макет рассчитан под холст ${selectedCanvas.label}.")
                     Button(
                         onClick = {
