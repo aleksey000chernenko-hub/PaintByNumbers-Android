@@ -45,17 +45,25 @@ fun PaintByNumbersApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var original by remember { mutableStateOf<Bitmap?>(null) }
+    var acrylic by remember { mutableStateOf<Bitmap?>(null) }
     var result by remember { mutableStateOf<PbnResult?>(null) }
     var colorCount by remember { mutableFloatStateOf(24f) }
     var minRegion by remember { mutableFloatStateOf(45f) }
+    var acrylicStrength by remember { mutableFloatStateOf(0.72f) }
     var processing by remember { mutableStateOf(false) }
     var view by remember { mutableIntStateOf(0) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) scope.launch {
-            original = withContext(Dispatchers.IO) { decodeBitmap(context.contentResolver, uri, 2400) }
+            processing = true
+            val decoded = withContext(Dispatchers.IO) { decodeBitmap(context.contentResolver, uri, 2400) }
+            original = decoded
             result = null
             view = 0
+            acrylic = if (decoded != null) {
+                withContext(Dispatchers.Default) { AcrylicPainter.render(decoded, 1600, acrylicStrength) }
+            } else null
+            processing = false
         }
     }
 
@@ -65,8 +73,8 @@ fun PaintByNumbersApp() {
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text("Картина по номерам", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Фото → цветовые области → контурный макет → номера → палитра")
+                Text("Фото → акриловая картина", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("После выбора фото приложение сразу создаёт художественную версию в стиле акриловой живописи. Режим картины по номерам сохранён ниже.")
 
                 Box(
                     Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)),
@@ -75,7 +83,7 @@ fun PaintByNumbersApp() {
                     val shown = when (view) {
                         1 -> result?.numberedTemplate
                         2 -> result?.paletteSheet
-                        else -> result?.colorPreview ?: original
+                        else -> acrylic ?: result?.colorPreview ?: original
                     }
                     if (shown == null) {
                         Text("Выберите фотографию")
@@ -95,6 +103,43 @@ fun PaintByNumbersApp() {
                 }
 
                 if (original != null) {
+                    Text("Сила акрилового эффекта: ${(acrylicStrength * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = acrylicStrength,
+                        onValueChange = { acrylicStrength = it },
+                        valueRange = 0.35f..1f
+                    )
+                    Button(
+                        onClick = {
+                            val src = original
+                            if (src != null) scope.launch {
+                                processing = true
+                                acrylic = withContext(Dispatchers.Default) { AcrylicPainter.render(src, 1600, acrylicStrength) }
+                                view = 0
+                                processing = false
+                            }
+                        },
+                        enabled = !processing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Обновить акриловый эффект") }
+
+                    acrylic?.let { art ->
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                    val ok = withContext(Dispatchers.IO) {
+                                        savePng(context.contentResolver, art, "ACRYLIC_${stamp}.png", "Pictures/AcrylicPaintings")
+                                    }
+                                    Toast.makeText(context, if (ok) "Акриловая картина сохранена" else "Ошибка сохранения", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Сохранить акриловую картину") }
+                    }
+
+                    HorizontalDivider()
+                    Text("Картина по номерам", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text("Количество красок: ${colorCount.toInt()}", fontWeight = FontWeight.Medium)
                     Slider(colorCount, { colorCount = it }, valueRange = 12f..36f, steps = 23)
                     Text("Упрощение мелких областей: ${minRegion.toInt()}", fontWeight = FontWeight.Medium)
@@ -102,7 +147,7 @@ fun PaintByNumbersApp() {
 
                     Button(
                         onClick = {
-                            val src = original
+                            val src = acrylic ?: original
                             if (src != null) {
                                 scope.launch {
                                     processing = true
@@ -133,9 +178,9 @@ fun PaintByNumbersApp() {
                             scope.launch {
                                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                                 val ok = withContext(Dispatchers.IO) {
-                                    savePng(context.contentResolver, r.colorPreview, "PBN_${stamp}_COLOR.png") &&
-                                        savePng(context.contentResolver, r.numberedTemplate, "PBN_${stamp}_TEMPLATE.png") &&
-                                        savePng(context.contentResolver, r.paletteSheet, "PBN_${stamp}_PALETTE.png")
+                                    savePng(context.contentResolver, r.colorPreview, "PBN_${stamp}_COLOR.png", "Pictures/PaintByNumbers") &&
+                                        savePng(context.contentResolver, r.numberedTemplate, "PBN_${stamp}_TEMPLATE.png", "Pictures/PaintByNumbers") &&
+                                        savePng(context.contentResolver, r.paletteSheet, "PBN_${stamp}_PALETTE.png", "Pictures/PaintByNumbers")
                                 }
                                 Toast.makeText(
                                     context,
@@ -150,10 +195,6 @@ fun PaintByNumbersApp() {
                     }
                 }
 
-                Text(
-                    "Совет: для портретов обычно подходят 20–28 красок; для пейзажей 24–36. Чем выше упрощение, тем крупнее и удобнее области для закрашивания.",
-                    style = MaterialTheme.typography.bodySmall
-                )
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -172,12 +213,17 @@ private fun decodeBitmap(resolver: android.content.ContentResolver, uri: Uri, ma
     return resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
 }
 
-private fun savePng(resolver: android.content.ContentResolver, bitmap: Bitmap, name: String): Boolean {
+private fun savePng(
+    resolver: android.content.ContentResolver,
+    bitmap: Bitmap,
+    name: String,
+    relativePath: String
+): Boolean {
     return try {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PaintByNumbers")
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
