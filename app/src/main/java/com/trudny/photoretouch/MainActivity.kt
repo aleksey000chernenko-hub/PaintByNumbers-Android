@@ -11,8 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,10 +24,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -32,6 +38,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,6 +61,7 @@ fun PaintByNumbersApp() {
     var selectedCanvas by remember { mutableStateOf(CanvasCropper.sizes.first()) }
     var cropOffsetX by remember { mutableFloatStateOf(0.5f) }
     var cropOffsetY by remember { mutableFloatStateOf(0.5f) }
+    var cropZoom by remember { mutableFloatStateOf(1f) }
     var cropConfirmed by remember { mutableStateOf(false) }
 
     var colorCount by remember { mutableFloatStateOf(24f) }
@@ -61,10 +69,11 @@ fun PaintByNumbersApp() {
     var acrylicStrength by remember { mutableFloatStateOf(0.72f) }
     var processing by remember { mutableStateOf(false) }
     var previewMode by remember { mutableIntStateOf(1) }
+    var comparePosition by remember { mutableFloatStateOf(0.5f) }
 
     fun refreshCropPreview() {
         val src = original ?: return
-        cropPreview = CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY)
+        cropPreview = CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY, cropZoom)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -75,12 +84,14 @@ fun PaintByNumbersApp() {
             selectedCanvas = CanvasCropper.sizes.first()
             cropOffsetX = 0.5f
             cropOffsetY = 0.5f
+            cropZoom = 1f
             cropConfirmed = false
             cropped = null
             acrylic = null
             result = null
             previewMode = 1
-            cropPreview = decoded?.let { CanvasCropper.crop(it, selectedCanvas, cropOffsetX, cropOffsetY) }
+            comparePosition = 0.5f
+            cropPreview = decoded?.let { CanvasCropper.crop(it, selectedCanvas, cropOffsetX, cropOffsetY, cropZoom) }
             processing = false
         }
     }
@@ -92,27 +103,64 @@ fun PaintByNumbersApp() {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text("Фото → акрил → холст → картина по номерам", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("Выберите фото, настройте холст и кадрирование, затем просматривайте оригинал, акрил и макет перед сохранением.")
+                Text("Кадрирование можно двигать пальцем и масштабировать щипком. После обработки доступно сравнение до/после свайпом.")
+
+                val cropGestureModifier = if (!cropConfirmed && original != null) {
+                    Modifier.pointerInput(original, selectedCanvas) {
+                        detectTransformGestures { _, pan, gestureZoom, _ ->
+                            val src = original ?: return@detectTransformGestures
+                            val newZoom = (cropZoom * gestureZoom).coerceIn(1f, 4f)
+                            val newX = (cropOffsetX - pan.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                            val newY = (cropOffsetY - pan.y / size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
+                            cropZoom = newZoom
+                            cropOffsetX = newX
+                            cropOffsetY = newY
+                            cropPreview = CanvasCropper.crop(src, selectedCanvas, newX, newY, newZoom)
+                        }
+                    }
+                } else Modifier
 
                 Box(
-                    Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)),
+                    Modifier
+                        .fillMaxWidth()
+                        .height(430.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp))
+                        .then(cropGestureModifier),
                     contentAlignment = Alignment.Center
                 ) {
-                    val shown = when {
-                        !cropConfirmed -> cropPreview ?: original
-                        previewMode == 0 -> cropped ?: original
-                        previewMode == 1 -> acrylic ?: cropped ?: original
-                        previewMode == 2 -> result?.colorPreview ?: acrylic ?: cropped ?: original
-                        previewMode == 3 -> result?.numberedTemplate ?: acrylic ?: cropped ?: original
-                        previewMode == 4 -> result?.paletteSheet ?: acrylic ?: cropped ?: original
-                        else -> acrylic ?: cropped ?: original
-                    }
-                    if (shown == null) {
-                        Text("Выберите фотографию")
-                    } else {
-                        Image(shown.asImageBitmap(), "Предпросмотр", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
+                    when {
+                        !cropConfirmed -> {
+                            val shown = cropPreview ?: original
+                            if (shown == null) Text("Выберите фотографию")
+                            else Image(shown.asImageBitmap(), "Кадрирование", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
+                        }
+                        previewMode == 5 && cropped != null && acrylic != null -> {
+                            BeforeAfterCompare(
+                                before = cropped!!,
+                                after = acrylic!!,
+                                position = comparePosition,
+                                onPositionChange = { comparePosition = it },
+                                modifier = Modifier.fillMaxSize().padding(6.dp)
+                            )
+                        }
+                        else -> {
+                            val shown = when (previewMode) {
+                                0 -> cropped ?: original
+                                1 -> acrylic ?: cropped ?: original
+                                2 -> result?.colorPreview ?: acrylic ?: cropped ?: original
+                                3 -> result?.numberedTemplate ?: acrylic ?: cropped ?: original
+                                4 -> result?.paletteSheet ?: acrylic ?: cropped ?: original
+                                else -> acrylic ?: cropped ?: original
+                            }
+                            if (shown == null) Text("Выберите фотографию")
+                            else Image(shown.asImageBitmap(), "Предпросмотр", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
+                        }
                     }
                     if (processing) CircularProgressIndicator()
+                }
+
+                if (!cropConfirmed && original != null) {
+                    Text("Двигайте фото одним или двумя пальцами. Щипок — увеличить/уменьшить. Масштаб: ${"%.1f".format(cropZoom)}×", style = MaterialTheme.typography.bodySmall)
                 }
 
                 if (cropConfirmed) {
@@ -120,12 +168,14 @@ fun PaintByNumbersApp() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         FilterChip(previewMode == 0, { previewMode = 0 }, { Text("До") }, modifier = Modifier.weight(1f))
                         FilterChip(previewMode == 1, { previewMode = 1 }, { Text("Акрил") }, modifier = Modifier.weight(1f))
-                        if (result != null) {
-                            FilterChip(previewMode == 2, { previewMode = 2 }, { Text("Цвет") }, modifier = Modifier.weight(1f))
-                        }
+                        FilterChip(previewMode == 5, { previewMode = 5 }, { Text("Сравнить") }, modifier = Modifier.weight(1f))
+                    }
+                    if (previewMode == 5) {
+                        Text("Проведите пальцем влево или вправо по изображению, чтобы двигать границу «до/после».", style = MaterialTheme.typography.bodySmall)
                     }
                     if (result != null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(previewMode == 2, { previewMode = 2 }, { Text("Цвет") }, modifier = Modifier.weight(1f))
                             FilterChip(previewMode == 3, { previewMode = 3 }, { Text("Макет") }, modifier = Modifier.weight(1f))
                             FilterChip(previewMode == 4, { previewMode = 4 }, { Text("Палитра") }, modifier = Modifier.weight(1f))
                         }
@@ -139,13 +189,13 @@ fun PaintByNumbersApp() {
                 if (original != null && !cropConfirmed) {
                     HorizontalDivider()
                     Text("1. Выберите размер холста", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-
                     CanvasCropper.sizes.forEach { size ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(
                                 selected = selectedCanvas == size,
                                 onClick = {
                                     selectedCanvas = size
+                                    cropZoom = 1f
                                     refreshCropPreview()
                                 }
                             )
@@ -154,25 +204,13 @@ fun PaintByNumbersApp() {
                     }
 
                     Text("2. Настройте кадрирование", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Можно пользоваться жестами прямо на фото или точными ползунками ниже.")
                     Text("Горизонтальное смещение")
-                    Slider(
-                        value = cropOffsetX,
-                        onValueChange = {
-                            cropOffsetX = it
-                            refreshCropPreview()
-                        },
-                        valueRange = 0f..1f
-                    )
+                    Slider(value = cropOffsetX, onValueChange = { cropOffsetX = it; refreshCropPreview() }, valueRange = 0f..1f)
                     Text("Вертикальное смещение")
-                    Slider(
-                        value = cropOffsetY,
-                        onValueChange = {
-                            cropOffsetY = it
-                            refreshCropPreview()
-                        },
-                        valueRange = 0f..1f
-                    )
-                    Text("Предпросмотр выше уже показан в пропорциях ${selectedCanvas.label}.", style = MaterialTheme.typography.bodySmall)
+                    Slider(value = cropOffsetY, onValueChange = { cropOffsetY = it; refreshCropPreview() }, valueRange = 0f..1f)
+                    Text("Масштаб: ${"%.1f".format(cropZoom)}×")
+                    Slider(value = cropZoom, onValueChange = { cropZoom = it; refreshCropPreview() }, valueRange = 1f..4f)
 
                     Button(
                         onClick = {
@@ -180,7 +218,7 @@ fun PaintByNumbersApp() {
                             if (src != null) scope.launch {
                                 processing = true
                                 val finalCrop = withContext(Dispatchers.Default) {
-                                    CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY)
+                                    CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY, cropZoom)
                                 }
                                 cropped = finalCrop
                                 acrylic = withContext(Dispatchers.Default) {
@@ -189,14 +227,13 @@ fun PaintByNumbersApp() {
                                 cropConfirmed = true
                                 result = null
                                 previewMode = 1
+                                comparePosition = 0.5f
                                 processing = false
                             }
                         },
                         enabled = !processing,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Подтвердить кадрирование и создать акрил")
-                    }
+                    ) { Text("Подтвердить кадрирование и создать акрил") }
                 }
 
                 if (cropConfirmed && cropped != null) {
@@ -289,6 +326,62 @@ fun PaintByNumbersApp() {
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun BeforeAfterCompare(
+    before: Bitmap,
+    after: Bitmap,
+    position: Float,
+    onPositionChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val beforeImage = remember(before) { before.asImageBitmap() }
+    val afterImage = remember(after) { after.asImageBitmap() }
+
+    Canvas(
+        modifier = modifier.pointerInput(before, after) {
+            detectHorizontalDragGestures(
+                onDragStart = { offset -> onPositionChange((offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)) },
+                onHorizontalDrag = { change, _ ->
+                    onPositionChange((change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f))
+                }
+            )
+        }
+    ) {
+        val canvasAspect = size.width / size.height
+        val imageAspect = before.width.toFloat() / before.height.toFloat()
+        val drawW: Float
+        val drawH: Float
+        if (imageAspect > canvasAspect) {
+            drawW = size.width
+            drawH = size.width / imageAspect
+        } else {
+            drawH = size.height
+            drawW = size.height * imageAspect
+        }
+        val left = (size.width - drawW) / 2f
+        val top = (size.height - drawH) / 2f
+        val dstOffset = androidx.compose.ui.unit.IntOffset(left.roundToInt(), top.roundToInt())
+        val dstSize = IntSize(drawW.roundToInt(), drawH.roundToInt())
+
+        drawImage(beforeImage, dstOffset = dstOffset, dstSize = dstSize)
+        val splitX = left + drawW * position.coerceIn(0f, 1f)
+        clipRect(left = left, top = top, right = splitX, bottom = top + drawH) {
+            drawImage(afterImage, dstOffset = dstOffset, dstSize = dstSize)
+        }
+        drawLine(
+            color = androidx.compose.ui.graphics.Color.White,
+            start = Offset(splitX, top),
+            end = Offset(splitX, top + drawH),
+            strokeWidth = 4f
+        )
+        drawCircle(
+            color = androidx.compose.ui.graphics.Color.White,
+            radius = 12f,
+            center = Offset(splitX, top + drawH / 2f)
+        )
     }
 }
 
