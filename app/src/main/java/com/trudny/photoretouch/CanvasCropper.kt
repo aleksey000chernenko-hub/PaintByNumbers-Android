@@ -15,24 +15,43 @@ object CanvasCropper {
         CanvasSize("40×40 см", 40, 40)
     )
 
-    fun crop(source: Bitmap, canvas: CanvasSize, offsetX: Float, offsetY: Float): Bitmap {
+    fun crop(
+        source: Bitmap,
+        canvas: CanvasSize,
+        offsetX: Float,
+        offsetY: Float,
+        zoom: Float = 1f
+    ): Bitmap {
         val targetAspect = canvas.aspect
         val sourceAspect = source.width.toFloat() / source.height.toFloat()
+        val safeZoom = zoom.coerceIn(1f, 4f)
 
-        var cropW = source.width
-        var cropH = source.height
-        var left = 0
-        var top = 0
+        var baseW = source.width
+        var baseH = source.height
 
         if (sourceAspect > targetAspect) {
-            cropW = (source.height * targetAspect).roundToInt().coerceAtMost(source.width)
-            val overflow = source.width - cropW
-            left = (overflow * offsetX.coerceIn(0f, 1f)).roundToInt()
+            baseW = (source.height * targetAspect).roundToInt().coerceAtMost(source.width)
         } else if (sourceAspect < targetAspect) {
-            cropH = (source.width / targetAspect).roundToInt().coerceAtMost(source.height)
-            val overflow = source.height - cropH
-            top = (overflow * offsetY.coerceIn(0f, 1f)).roundToInt()
+            baseH = (source.width / targetAspect).roundToInt().coerceAtMost(source.height)
         }
+
+        var cropW = (baseW / safeZoom).roundToInt().coerceAtLeast(1)
+        var cropH = (baseH / safeZoom).roundToInt().coerceAtLeast(1)
+
+        // Keep the exact canvas aspect after zoom.
+        if (cropW.toFloat() / cropH > targetAspect) {
+            cropW = (cropH * targetAspect).roundToInt().coerceAtLeast(1)
+        } else {
+            cropH = (cropW / targetAspect).roundToInt().coerceAtLeast(1)
+        }
+
+        cropW = cropW.coerceAtMost(source.width)
+        cropH = cropH.coerceAtMost(source.height)
+
+        val overflowX = (source.width - cropW).coerceAtLeast(0)
+        val overflowY = (source.height - cropH).coerceAtLeast(0)
+        val left = (overflowX * offsetX.coerceIn(0f, 1f)).roundToInt().coerceIn(0, overflowX)
+        val top = (overflowY * offsetY.coerceIn(0f, 1f)).roundToInt().coerceIn(0, overflowY)
 
         return Bitmap.createBitmap(source, left, top, cropW, cropH)
     }
