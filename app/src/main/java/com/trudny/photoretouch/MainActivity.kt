@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -33,7 +34,10 @@ import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { PaintByNumbersApp() } }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { PaintByNumbersApp() }
+    }
 }
 
 @Composable
@@ -50,35 +54,73 @@ fun PaintByNumbersApp() {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) scope.launch {
             original = withContext(Dispatchers.IO) { decodeBitmap(context.contentResolver, uri, 2400) }
-            result = null; view = 0
+            result = null
+            view = 0
         }
     }
 
     MaterialTheme {
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 Text("Картина по номерам", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("Фото → цветовые области → контурный макет → номера → палитра")
-                Box(Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) {
-                    val shown = when (view) { 1 -> result?.numberedTemplate; 2 -> result?.paletteSheet; else -> result?.colorPreview ?: original }
-                    if (shown == null) Text("Выберите фотографию") else Image(shown.asImageBitmap(), "Предпросмотр", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
+
+                Box(
+                    Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val shown = when (view) {
+                        1 -> result?.numberedTemplate
+                        2 -> result?.paletteSheet
+                        else -> result?.colorPreview ?: original
+                    }
+                    if (shown == null) {
+                        Text("Выберите фотографию")
+                    } else {
+                        Image(
+                            shown.asImageBitmap(),
+                            "Предпросмотр",
+                            Modifier.fillMaxSize().padding(6.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                     if (processing) CircularProgressIndicator()
                 }
-                Button(onClick = { picker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) { Text(if (original == null) "Выбрать фото" else "Выбрать другое фото") }
+
+                Button(onClick = { picker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (original == null) "Выбрать фото" else "Выбрать другое фото")
+                }
+
                 if (original != null) {
                     Text("Количество красок: ${colorCount.toInt()}", fontWeight = FontWeight.Medium)
                     Slider(colorCount, { colorCount = it }, valueRange = 12f..36f, steps = 23)
                     Text("Упрощение мелких областей: ${minRegion.toInt()}", fontWeight = FontWeight.Medium)
                     Slider(minRegion, { minRegion = it }, valueRange = 15f..120f)
-                    Button(onClick = {
-                        val src = original ?: return@Button
-                        scope.launch {
-                            processing = true
-                            result = withContext(Dispatchers.Default) { PaintByNumbersGenerator.generate(src, colorCount.toInt(), 1200, minRegion.toInt()) }
-                            view = 0; processing = false
-                        }
-                    }, enabled = !processing, modifier = Modifier.fillMaxWidth()) { Text("Создать картину по номерам") }
+
+                    Button(
+                        onClick = {
+                            val src = original
+                            if (src != null) {
+                                scope.launch {
+                                    processing = true
+                                    result = withContext(Dispatchers.Default) {
+                                        PaintByNumbersGenerator.generate(src, colorCount.toInt(), 1200, minRegion.toInt())
+                                    }
+                                    view = 0
+                                    processing = false
+                                }
+                            }
+                        },
+                        enabled = !processing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Создать картину по номерам")
+                    }
                 }
+
                 result?.let { r ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         FilterChip(view == 0, { view = 0 }, { Text("Цвет") }, modifier = Modifier.weight(1f))
@@ -86,19 +128,32 @@ fun PaintByNumbersApp() {
                         FilterChip(view == 2, { view = 2 }, { Text("Палитра") }, modifier = Modifier.weight(1f))
                     }
                     Text("Сформировано ${r.palette.size} цветов. Каждый номер на макете соответствует номеру в палитре.")
-                    Button(onClick = {
-                        scope.launch {
-                            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                            val ok = withContext(Dispatchers.IO) {
-                                savePng(context.contentResolver, r.colorPreview, "PBN_${stamp}_COLOR.png") &&
-                                savePng(context.contentResolver, r.numberedTemplate, "PBN_${stamp}_TEMPLATE.png") &&
-                                savePng(context.contentResolver, r.paletteSheet, "PBN_${stamp}_PALETTE.png")
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                val ok = withContext(Dispatchers.IO) {
+                                    savePng(context.contentResolver, r.colorPreview, "PBN_${stamp}_COLOR.png") &&
+                                        savePng(context.contentResolver, r.numberedTemplate, "PBN_${stamp}_TEMPLATE.png") &&
+                                        savePng(context.contentResolver, r.paletteSheet, "PBN_${stamp}_PALETTE.png")
+                                }
+                                Toast.makeText(
+                                    context,
+                                    if (ok) "Комплект сохранён в Pictures/PaintByNumbers" else "Ошибка сохранения",
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
-                            Toast.makeText(context, if (ok) "Комплект сохранён в Pictures/PaintByNumbers" else "Ошибка сохранения", Toast.LENGTH_LONG).show()
-                        }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить весь комплект") }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Сохранить весь комплект")
+                    }
                 }
-                Text("Совет: для портретов обычно подходят 20–28 красок; для пейзажей 24–36. Чем выше упрощение, тем крупнее и удобнее области для закрашивания.", style = MaterialTheme.typography.bodySmall)
+
+                Text(
+                    "Совет: для портретов обычно подходят 20–28 красок; для пейзажей 24–36. Чем выше упрощение, тем крупнее и удобнее области для закрашивания.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -110,16 +165,30 @@ private fun decodeBitmap(resolver: android.content.ContentResolver, uri: Uri, ma
     resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
     var sample = 1
     while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
-    val opts = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sample
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
     return resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
 }
 
-private fun savePng(resolver: android.content.ContentResolver, bitmap: Bitmap, name: String): Boolean = try {
-    val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, name); put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PaintByNumbers"); put(MediaStore.Images.Media.IS_PENDING, 1)
+private fun savePng(resolver: android.content.ContentResolver, bitmap: Bitmap, name: String): Boolean {
+    return try {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PaintByNumbers")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        resolver.openOutputStream(uri)?.use {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+        } ?: return false
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        true
+    } catch (_: Exception) {
+        false
     }
-    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
-    resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } ?: return false
-    values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0); resolver.update(uri, values, null, null); true
-} catch (_: Exception) { false }
+}
