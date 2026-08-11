@@ -44,25 +44,43 @@ class MainActivity : ComponentActivity() {
 fun PaintByNumbersApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
     var original by remember { mutableStateOf<Bitmap?>(null) }
+    var cropPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var cropped by remember { mutableStateOf<Bitmap?>(null) }
     var acrylic by remember { mutableStateOf<Bitmap?>(null) }
     var result by remember { mutableStateOf<PbnResult?>(null) }
+
+    var selectedCanvas by remember { mutableStateOf(CanvasCropper.sizes.first()) }
+    var cropOffsetX by remember { mutableFloatStateOf(0.5f) }
+    var cropOffsetY by remember { mutableFloatStateOf(0.5f) }
+    var cropConfirmed by remember { mutableStateOf(false) }
+
     var colorCount by remember { mutableFloatStateOf(24f) }
     var minRegion by remember { mutableFloatStateOf(45f) }
     var acrylicStrength by remember { mutableFloatStateOf(0.72f) }
     var processing by remember { mutableStateOf(false) }
     var view by remember { mutableIntStateOf(0) }
 
+    fun refreshCropPreview() {
+        val src = original ?: return
+        cropPreview = CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY)
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) scope.launch {
             processing = true
             val decoded = withContext(Dispatchers.IO) { decodeBitmap(context.contentResolver, uri, 2400) }
             original = decoded
+            selectedCanvas = CanvasCropper.sizes.first()
+            cropOffsetX = 0.5f
+            cropOffsetY = 0.5f
+            cropConfirmed = false
+            cropped = null
+            acrylic = null
             result = null
             view = 0
-            acrylic = if (decoded != null) {
-                withContext(Dispatchers.Default) { AcrylicPainter.render(decoded, 1600, acrylicStrength) }
-            } else null
+            cropPreview = decoded?.let { CanvasCropper.crop(it, selectedCanvas, cropOffsetX, cropOffsetY) }
             processing = false
         }
     }
@@ -73,27 +91,23 @@ fun PaintByNumbersApp() {
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text("Фото → акриловая картина", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("После выбора фото приложение сразу создаёт художественную версию в стиле акриловой живописи. Режим картины по номерам сохранён ниже.")
+                Text("Фото → акрил → холст → картина по номерам", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("Сначала выберите фото, затем размер холста и кадрирование. После подтверждения приложение автоматически создаст акриловую версию.")
 
                 Box(
                     Modifier.fillMaxWidth().height(430.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    val shown = when (view) {
-                        1 -> result?.numberedTemplate
-                        2 -> result?.paletteSheet
-                        else -> acrylic ?: result?.colorPreview ?: original
+                    val shown = when {
+                        !cropConfirmed -> cropPreview ?: original
+                        view == 1 -> result?.numberedTemplate
+                        view == 2 -> result?.paletteSheet
+                        else -> acrylic ?: result?.colorPreview ?: cropped ?: original
                     }
                     if (shown == null) {
                         Text("Выберите фотографию")
                     } else {
-                        Image(
-                            shown.asImageBitmap(),
-                            "Предпросмотр",
-                            Modifier.fillMaxSize().padding(6.dp),
-                            contentScale = ContentScale.Fit
-                        )
+                        Image(shown.asImageBitmap(), "Предпросмотр", Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
                     }
                     if (processing) CircularProgressIndicator()
                 }
@@ -102,16 +116,86 @@ fun PaintByNumbersApp() {
                     Text(if (original == null) "Выбрать фото" else "Выбрать другое фото")
                 }
 
-                if (original != null) {
-                    Text("Сила акрилового эффекта: ${(acrylicStrength * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                if (original != null && !cropConfirmed) {
+                    HorizontalDivider()
+                    Text("1. Выберите размер холста", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+
+                    CanvasCropper.sizes.forEach { size ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = selectedCanvas == size,
+                                onClick = {
+                                    selectedCanvas = size
+                                    refreshCropPreview()
+                                }
+                            )
+                            Text(size.label)
+                        }
+                    }
+
+                    Text("2. Настройте кадрирование", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Горизонтальное смещение")
                     Slider(
-                        value = acrylicStrength,
-                        onValueChange = { acrylicStrength = it },
-                        valueRange = 0.35f..1f
+                        value = cropOffsetX,
+                        onValueChange = {
+                            cropOffsetX = it
+                            refreshCropPreview()
+                        },
+                        valueRange = 0f..1f
                     )
+                    Text("Вертикальное смещение")
+                    Slider(
+                        value = cropOffsetY,
+                        onValueChange = {
+                            cropOffsetY = it
+                            refreshCropPreview()
+                        },
+                        valueRange = 0f..1f
+                    )
+                    Text("Предпросмотр выше уже показан в пропорциях ${selectedCanvas.label}.", style = MaterialTheme.typography.bodySmall)
+
                     Button(
                         onClick = {
                             val src = original
+                            if (src != null) scope.launch {
+                                processing = true
+                                val finalCrop = withContext(Dispatchers.Default) {
+                                    CanvasCropper.crop(src, selectedCanvas, cropOffsetX, cropOffsetY)
+                                }
+                                cropped = finalCrop
+                                acrylic = withContext(Dispatchers.Default) {
+                                    AcrylicPainter.render(finalCrop, 1600, acrylicStrength)
+                                }
+                                cropConfirmed = true
+                                result = null
+                                view = 0
+                                processing = false
+                            }
+                        },
+                        enabled = !processing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Подтвердить кадрирование и создать акрил")
+                    }
+                }
+
+                if (cropConfirmed && cropped != null) {
+                    Text("Холст: ${selectedCanvas.label}", fontWeight = FontWeight.Bold)
+                    OutlinedButton(
+                        onClick = {
+                            cropConfirmed = false
+                            result = null
+                            view = 0
+                            refreshCropPreview()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Изменить размер или кадрирование") }
+
+                    Text("Сила акрилового эффекта: ${(acrylicStrength * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                    Slider(value = acrylicStrength, onValueChange = { acrylicStrength = it }, valueRange = 0.35f..1f)
+                    Button(
+                        onClick = {
+                            val src = cropped
                             if (src != null) scope.launch {
                                 processing = true
                                 acrylic = withContext(Dispatchers.Default) { AcrylicPainter.render(src, 1600, acrylicStrength) }
@@ -128,8 +212,9 @@ fun PaintByNumbersApp() {
                             onClick = {
                                 scope.launch {
                                     val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                    val name = "ACRYLIC_${selectedCanvas.widthCm}x${selectedCanvas.heightCm}_${stamp}.png"
                                     val ok = withContext(Dispatchers.IO) {
-                                        savePng(context.contentResolver, art, "ACRYLIC_${stamp}.png", "Pictures/AcrylicPaintings")
+                                        savePng(context.contentResolver, art, name, "Pictures/AcrylicPaintings")
                                     }
                                     Toast.makeText(context, if (ok) "Акриловая картина сохранена" else "Ошибка сохранения", Toast.LENGTH_LONG).show()
                                 }
@@ -147,23 +232,19 @@ fun PaintByNumbersApp() {
 
                     Button(
                         onClick = {
-                            val src = acrylic ?: original
-                            if (src != null) {
-                                scope.launch {
-                                    processing = true
-                                    result = withContext(Dispatchers.Default) {
-                                        PaintByNumbersGenerator.generate(src, colorCount.toInt(), 1200, minRegion.toInt())
-                                    }
-                                    view = 0
-                                    processing = false
+                            val src = acrylic ?: cropped
+                            if (src != null) scope.launch {
+                                processing = true
+                                result = withContext(Dispatchers.Default) {
+                                    PaintByNumbersGenerator.generate(src, colorCount.toInt(), 1200, minRegion.toInt())
                                 }
+                                view = 0
+                                processing = false
                             }
                         },
                         enabled = !processing,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Создать картину по номерам")
-                    }
+                    ) { Text("Создать картину по номерам") }
                 }
 
                 result?.let { r ->
@@ -172,27 +253,22 @@ fun PaintByNumbersApp() {
                         FilterChip(view == 1, { view = 1 }, { Text("Макет") }, modifier = Modifier.weight(1f))
                         FilterChip(view == 2, { view = 2 }, { Text("Палитра") }, modifier = Modifier.weight(1f))
                     }
-                    Text("Сформировано ${r.palette.size} цветов. Каждый номер на макете соответствует номеру в палитре.")
+                    Text("Сформировано ${r.palette.size} цветов. Макет рассчитан под холст ${selectedCanvas.label}.")
                     Button(
                         onClick = {
                             scope.launch {
                                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                val prefix = "PBN_${selectedCanvas.widthCm}x${selectedCanvas.heightCm}_${stamp}"
                                 val ok = withContext(Dispatchers.IO) {
-                                    savePng(context.contentResolver, r.colorPreview, "PBN_${stamp}_COLOR.png", "Pictures/PaintByNumbers") &&
-                                        savePng(context.contentResolver, r.numberedTemplate, "PBN_${stamp}_TEMPLATE.png", "Pictures/PaintByNumbers") &&
-                                        savePng(context.contentResolver, r.paletteSheet, "PBN_${stamp}_PALETTE.png", "Pictures/PaintByNumbers")
+                                    savePng(context.contentResolver, r.colorPreview, "${prefix}_COLOR.png", "Pictures/PaintByNumbers") &&
+                                        savePng(context.contentResolver, r.numberedTemplate, "${prefix}_TEMPLATE.png", "Pictures/PaintByNumbers") &&
+                                        savePng(context.contentResolver, r.paletteSheet, "${prefix}_PALETTE.png", "Pictures/PaintByNumbers")
                                 }
-                                Toast.makeText(
-                                    context,
-                                    if (ok) "Комплект сохранён в Pictures/PaintByNumbers" else "Ошибка сохранения",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                Toast.makeText(context, if (ok) "Комплект сохранён" else "Ошибка сохранения", Toast.LENGTH_LONG).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Сохранить весь комплект")
-                    }
+                    ) { Text("Сохранить весь комплект") }
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -227,9 +303,7 @@ private fun savePng(
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
-        resolver.openOutputStream(uri)?.use {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-        } ?: return false
+        resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } ?: return false
         values.clear()
         values.put(MediaStore.Images.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
